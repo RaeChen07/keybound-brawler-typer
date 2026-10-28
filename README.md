@@ -1,91 +1,93 @@
-# Keybound Brawler Auto Typer · FF14 × FF7 联动打字游戏自动打字
+# Keybound Brawler Auto Typer · FFXIV × FFVII Typing Event Bot
 
-FF14（Final Fantasy XIV）× FF7 重制版系列联动活动 **Keybound Brawler** 的自动打字脚本：截屏 → 识别怪物头上的单词 → 自动打字并回车。
+**English** | [中文](README.zh-CN.md)
 
-> ⚠️ **免责声明**：使用第三方工具自动操作游戏违反 Square Enix 的用户协议，可能导致账号被处罚。本项目仅供学习 OCR / 屏幕自动化技术，使用风险自负。
+An auto typer for **Keybound Brawler**, the typing minigame from the Final Fantasy XIV × Final Fantasy VII Remake collaboration. It takes screenshots, reads the words above the enemies with OCR, then types each word and presses Enter.
 
-## 关于这个活动
+> ⚠️ **Disclaimer**: Using third-party tools to automate gameplay violates the Square Enix User Agreement and may get your account penalized. This project is for learning about OCR and screen automation. Use it at your own risk.
+
+## About the event
 
 | | |
 |---|---|
-| 活动名称 | Keybound Brawler（打字游戏，首期联动 FINAL FANTASY VII REMAKE 系列） |
-| 开始时间 | 2026 年 10 月 28 日 |
-| 持续时间 | 到资料片 *Evercold* 上线（预计 2027 年 1 月），之后不定期复刻 |
-| 地点 | 金碟游乐场新区域 Keybound Square |
-| 玩法 | 4 人小队，输入怪物头上的单词攻击敌人，一波一波推进，最后打 Boss（如 Airbuster） |
-| 条件 | 15 级以上，已解锁金碟游乐场，完成限时任务 "Keyward Bound"；**必须用键盘** |
-| 奖励 | 用 MGC 兑换：蒂法 / 巴雷特（Avalanche）时装、Avalanche 加特林时尚配饰、魔导蝎子坐骑、小巴雷特宠物、/magitype 情感动作、乐谱、肖像框等 |
+| Name | Keybound Brawler (typing minigame; its first collaboration is with the FINAL FANTASY VII REMAKE series) |
+| Start | October 28, 2026 |
+| Duration | Until the *Evercold* expansion launches (planned for January 2027), then returns at irregular intervals |
+| Location | Keybound Square, a new area of the Manderville Gold Saucer |
+| Gameplay | Four-player party. Type the word above an enemy to attack it, clear wave after wave, then fight a boss (e.g. Airbuster) |
+| Requirements | Level 15+, Gold Saucer unlocked, the limited-time quest "Keyward Bound". **A keyboard is required** |
+| Rewards | Spend MGC on Tifa / Barret (Avalanche) outfits, the Avalanche Gatling Gun fashion accessory, a Magitek Scorpion mount, a Wind-up Barret minion, the /magitype emote, orchestrion rolls, a portrait framer's kit and more |
 
-同一联动的大头是 *Evercold* 里两边开发组合作的 8 人raid系列 *Beyond the Lifestream*。
+The bigger part of the crossover is *Beyond the Lifestream*, an 8-player raid series in *Evercold* that both development teams made together.
 
-资料来源：[FFXIV Console Games Wiki](https://ffxiv.consolegameswiki.com/wiki/Keybound_Brawler)、[Nova Crystallis](https://novacrystallis.com/2026/10/keybound-brawler-event-arrives-in-final-fantasy-xiv-on-october-28-featuring-the-final-fantasy-vii-remake-series/)、[MMOHuts](https://mmohuts.com/news/final-fantasy-xiv-adds-a-typing-event-with-final-fantasy-vii-remake-rewards-on-october-28)
+Sources: [FFXIV Console Games Wiki](https://ffxiv.consolegameswiki.com/wiki/Keybound_Brawler), [Nova Crystallis](https://novacrystallis.com/2026/10/keybound-brawler-event-arrives-in-final-fantasy-xiv-on-october-28-featuring-the-final-fantasy-vii-remake-series/), [MMOHuts](https://mmohuts.com/news/final-fantasy-xiv-adds-a-typing-event-with-final-fantasy-vii-remake-rewards-on-october-28)
 
-## 功能
+## Features
 
-- **按框的颜色决定顺序**：红 / 金 / 绿框优先，然后蓝框；同色先打离你最近（最靠下）的。灰框、直接写在背景上的字（Boss 技能名、红字提示横幅等）不打
-- **禁止打字标志**：出现红色禁止标志 3 秒后停手，消失 3 秒后继续（打到一半也会停住，之后接着打）
-- **I / l 分不清**：整句第一个字母先试 `i`，其他位置先试 `l`；没打掉就自动换拼法再试，这类词排在其他词后面打
-- 空格、标点都会打；大小写无所谓，统一按小写打
-- 只识别屏幕中间区域，忽略 HP、分数、聊天头像、玩家名和输入框
+- **Order by label color**: red, gold and green labels first, then blue. Within a color, it types the closest (lowest on screen) word first. It skips gray labels and text drawn straight on the background (boss skill names, the red warning banner, etc.)
+- **No-typing sign**: when the red prohibition sign appears, it stops typing after 3 seconds and resumes 3 seconds after the sign is gone. If this happens mid-word, it pauses and then finishes the word
+- **I / l confusion**: these look identical in the game font. The first letter of a line is tried as `i`, any other position as `l`. If the word doesn't clear, the next spelling is tried. These words are typed after the others
+- Types spaces and punctuation. Case doesn't matter, so everything is typed in lowercase
+- Reads only the middle of the screen and ignores HP, score, chat icons, player names and the input box
 
-## 使用
+## Usage
 
-### 方式一：直接用 exe（不用装 Python）
+### Option 1: exe (no Python needed)
 
-去 [Releases](../../releases) 下载 `typer_bot.exe`，双击运行，3 秒内切回游戏。
+Download `typer_bot.exe` from [Releases](../../releases), double-click it, then switch back to the game within 3 seconds.
 
-### 方式二：用 Python 运行
+### Option 2: run with Python
 
-需要 Windows + Python 3.9 ~ 3.12。
+Requires Windows and Python 3.9–3.12.
 
 ```bash
 python -m pip install -r requirements.txt
 python typer_bot.py
 ```
 
-### 热键
+### Hotkeys
 
-- **F8** 暂停 / 继续
-- **F9** 退出
+- **F8**: pause / resume
+- **F9**: quit
 
-### 注意
+### Notes
 
-- 游戏要**全屏**并且在**主显示器**上（识别区域按屏幕比例算）
-- 游戏如果是管理员身份运行，脚本 / exe 也要用管理员身份运行，不然打不进字
-- 打包的 exe 可能被杀毒软件误报
+- The game must be **fullscreen** on the **primary monitor** (the detection area is set as a fraction of the screen)
+- If the game runs as administrator, run the script / exe as administrator too, or the keys won't reach the game
+- Antivirus software may flag the packaged exe as a false positive
 
-## 调试
+## Debugging
 
-截一张整屏图，然后：
+Take a full-screen screenshot, then run:
 
 ```bash
-python typer_bot.py --test 截图.png
+python typer_bot.py --test screenshot.png
 ```
 
-会打印识别到的词、颜色和是否有禁止标志，并生成 `debug.png`（绿框 = 识别区域，红框 = 忽略的输入框）。
+It prints the words it found, their colors and whether a no-typing sign is present, and saves `debug.png` (green box = detection area, red box = ignored input box).
 
-常用设置都在 `typer_bot.py` 顶部：
+The main settings are at the top of `typer_bot.py`:
 
-| 设置 | 作用 |
+| Setting | What it does |
 |---|---|
-| `REGION` | 识别区域（左, 上, 右, 下，占屏幕比例） |
-| `IGNORE_BANDS` | 识别区里挖掉的横条（输入框） |
-| `BEFORE_TYPE` / `KEY_DELAY` / `SHIFT_DELAY` | 打字速度，游戏卡字就调大 |
-| `SIGN_DELAY` / `SIGN_WAIT` | 禁止标志出现后多久停手 / 消失后多久恢复 |
-| `MONITOR` | 第几个显示器 |
+| `REGION` | Detection area (left, top, right, bottom as fractions of the screen) |
+| `IGNORE_BANDS` | Horizontal bands cut out of the detection area (the input box) |
+| `BEFORE_TYPE` / `KEY_DELAY` / `SHIFT_DELAY` | Typing speed. Increase them if the game drops keys |
+| `SIGN_DELAY` / `SIGN_WAIT` | How long after the sign appears to stop / after it disappears to resume |
+| `MONITOR` | Which monitor to capture |
 
-## 打包 exe
+## Building the exe
 
 ```bash
 python -m pip install pyinstaller
 python -m PyInstaller --onefile --console --name typer_bot --collect-all rapidocr_onnxruntime --collect-binaries onnxruntime typer_bot.py
 ```
 
-建议在只装了 `requirements.txt` 的干净虚拟环境里打包，否则 exe 会把电脑上其他大库一起打进去。
+Build in a clean virtual environment with only `requirements.txt` installed. Otherwise the exe will bundle every other large library on your machine.
 
-## 原理
+## How it works
 
-1. [mss](https://github.com/BoboTiG/python-mss) 截屏
-2. [RapidOCR](https://github.com/RapidAI/RapidOCR)（ONNX Runtime）识别文字
-3. 取文字外面一圈的颜色判断框的颜色，OpenCV 轮廓检测找禁止标志
-4. Windows `SendInput` 按扫描码发送按键（DirectX 游戏也能收到）
+1. [mss](https://github.com/BoboTiG/python-mss) captures the screen
+2. [RapidOCR](https://github.com/RapidAI/RapidOCR) (ONNX Runtime) reads the text
+3. The color of a thin ring around each word decides the label color. OpenCV contour detection finds the no-typing sign
+4. Windows `SendInput` sends keys as scan codes, so DirectX games receive them
