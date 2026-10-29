@@ -8,7 +8,9 @@
 """
 import argparse
 import ctypes
+from ctypes import wintypes
 import itertools
+import os
 import re
 import sys
 import threading
@@ -46,6 +48,47 @@ user32 = ctypes.WinDLL("user32", use_last_error=True)
 KEYEVENTF_KEYUP = 0x0002
 KEYEVENTF_SCANCODE = 0x0008
 VK_SHIFT, VK_RETURN, VK_F8, VK_F9 = 0x10, 0x0D, 0x77, 0x78
+GAME_EXECUTABLES = {"ffxiv_dx11.exe", "ffxiv.exe"}
+PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+user32.GetForegroundWindow.restype = wintypes.HWND
+user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+kernel32.OpenProcess.restype = wintypes.HANDLE
+kernel32.QueryFullProcessImageNameW.argtypes = [wintypes.HANDLE, wintypes.DWORD,
+                                               wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD)]
+kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+
+
+class GameNotFocused(Exception):
+    """Typing was skipped because FFXIV is not the foreground application."""
+
+
+def game_is_focused():
+    """Check the foreground process executable, not its easily spoofed title."""
+    hwnd = user32.GetForegroundWindow()
+    if not hwnd:
+        return False
+    pid = wintypes.DWORD()
+    user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+    if not pid.value:
+        return False
+    handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid.value)
+    if not handle:
+        return False
+    try:
+        name = ctypes.create_unicode_buffer(32768)
+        length = wintypes.DWORD(len(name))
+        if not kernel32.QueryFullProcessImageNameW(handle, 0, name, ctypes.byref(length)):
+            return False
+        return os.path.basename(name.value).lower() in GAME_EXECUTABLES
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+def require_game_focus():
+    if not game_is_focused():
+        raise GameNotFocused
 
 
 class KEYBDINPUT(ctypes.Structure):
@@ -71,17 +114,24 @@ def _send_scan(vk, up=False):
 
 
 def tap(vk, shift=False):
+    require_game_focus()
     # Shift 前后都要留时间, 不然游戏会把顺序搞乱
     if shift:
         _send_scan(VK_SHIFT)
         time.sleep(SHIFT_DELAY)
-    _send_scan(vk)
-    time.sleep(KEY_DELAY / 2)
-    _send_scan(vk, up=True)
-    if shift:
-        time.sleep(SHIFT_DELAY)
-        _send_scan(VK_SHIFT, up=True)
-        time.sleep(SHIFT_DELAY)
+    try:
+        # Re-check after Shift; always release keys even if focus changes.
+        require_game_focus()
+        _send_scan(vk)
+        try:
+            time.sleep(KEY_DELAY / 2)
+        finally:
+            _send_scan(vk, up=True)
+    finally:
+        if shift:
+            time.sleep(SHIFT_DELAY)
+            _send_scan(VK_SHIFT, up=True)
+            time.sleep(SHIFT_DELAY)
     time.sleep(KEY_DELAY)
 
 
@@ -89,6 +139,7 @@ def type_text(text, guard=None):
     time.sleep(BEFORE_TYPE)
     # 大小写无所谓, 字母一律小写打, 只有标点才需要 Shift
     for k, ch in enumerate(text.lower()):
+        require_game_focus()
         if guard and k % SIGN_CHECK_EVERY == 0:
             guard.wait()  # 打到一半出现禁止标志就停下, 消失后接着打
         r = user32.VkKeyScanW(ord(ch))
@@ -313,6 +364,9 @@ def run():
             if paused:
                 time.sleep(0.1)
                 continue
+            if not game_is_focused():
+                time.sleep(0.1)
+                continue
             guard.wait()
             frame = cv2.cvtColor(np.array(sct.grab(mon)), cv2.COLOR_BGRA2BGR)
             now = time.time()
@@ -329,7 +383,11 @@ def run():
                 opts = spellings(word)
                 text = opts[tries.get(key, 0) % len(opts)]
                 print(f"打: {text}  (认到 {word}, {color}, y={y}, conf={score:.2f})")
-                type_text(text, guard)
+                try:
+                    type_text(text, guard)
+                except GameNotFocused:
+                    print("FFXIV 不在前台, 已暂停输入")
+                    break
                 recent[key] = time.time()
                 tries[key] = tries.get(key, 0) + 1
                 time.sleep(AFTER_ENTER)

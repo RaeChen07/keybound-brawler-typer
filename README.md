@@ -27,6 +27,7 @@ Sources: [FFXIV Console Games Wiki](https://ffxiv.consolegameswiki.com/wiki/Keyb
 - **Order by label color**: red, gold and green labels first, then blue. Within a color, it types the closest (lowest on screen) word first. It skips gray labels and text drawn straight on the background (boss skill names, the red warning banner, etc.)
 - **No-typing sign**: when the red prohibition sign appears, it stops typing after 3 seconds and resumes 3 seconds after the sign is gone. If this happens mid-word, it pauses and then finishes the word
 - **I / l confusion**: these look identical in the game font. The first letter of a line is tried as `i`, any other position as `l`. If the word doesn't clear, the next spelling is tried. These words are typed after the others
+- **Focus safety**: keyboard input is sent only while the foreground process is `ffxiv_dx11.exe` or `ffxiv.exe`. Switching to another application suspends typing until FFXIV is focused again
 - Types spaces and punctuation. Case doesn't matter, so everything is typed in lowercase
 - Reads only the middle of the screen and ignores HP, score, chat icons, player names and the input box
 
