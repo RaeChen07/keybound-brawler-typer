@@ -24,6 +24,8 @@ MESSAGES = {
                "zh": "打: {text}  (认到 {word}, {color}, y={y}, conf={score:.2f})"},
     "focus_lost": {"en": "FFXIV is not in the foreground; typing paused",
                    "zh": "FFXIV 不在前台, 已暂停输入"},
+    "ocr_retry": {"en": "Screenshot or OCR failed; retrying: {error}",
+                  "zh": "截图或 OCR 失败，重试: {error}"},
     "test_help": {"en": "Recognize words in one screenshot without typing",
                   "zh": "用截图测试识别"},
     "error_exit": {"en": "Error. Press Enter to close the window",

@@ -379,7 +379,7 @@ def run(language="en"):
             except (cv2.error, ValueError, TypeError, IndexError, OSError) as exc:
                 # A single corrupt capture / OCR result should not end the session.
                 if time.monotonic() - last_error > 5:
-                    print(f"截图或 OCR 失败，重试: {exc}")
+                    print(tr("ocr_retry", language, error=exc))
                     last_error = time.monotonic()
                 time.sleep(0.1)
                 continue
