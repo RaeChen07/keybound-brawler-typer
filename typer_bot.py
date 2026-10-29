@@ -20,6 +20,7 @@ import cv2
 import mss
 import numpy as np
 from rapidocr_onnxruntime import RapidOCR
+from i18n import resolve_language, tr
 
 # ---------------- 配置 ----------------
 MONITOR = 1            # 第几个显示器 (mss 编号, 1 = 主屏)
@@ -177,7 +178,8 @@ class StopSignGuard:
     """禁止标志出现 SIGN_DELAY 秒后停手, 消失 SIGN_WAIT 秒后再继续打
     后台线程一直盯着标志, 这样出现/消失的时间点准确, 不受 OCR 慢的影响"""
 
-    def __init__(self, mon):
+    def __init__(self, mon, language="en"):
+        self.language = language
         self.screen_w = mon["width"]
         self.box = {"left": mon["left"] + int(REGION[0] * mon["width"]),
                     "top": mon["top"] + int(REGION[1] * mon["height"]),
@@ -195,7 +197,7 @@ class StopSignGuard:
                 if has_stop_sign(img, self.screen_w):
                     if self.first_seen is None:
                         self.first_seen = now
-                        print(f"发现禁止标志, {SIGN_DELAY:g} 秒后停手")
+                        print(tr("sign_seen", self.language, delay=SIGN_DELAY))
                     self.last_seen = now
                 elif self.first_seen is not None and now - self.last_seen >= SIGN_WAIT:
                     self.first_seen = None  # 消失够久了, 这一次结束
@@ -208,13 +210,13 @@ class StopSignGuard:
     def wait(self):
         if not self.blocked():
             return
-        print("禁止标志, 停止打字...")
+        print(tr("sign_blocked", self.language))
         while self.blocked():
             if key_pressed(VK_F9):
-                print("退出")
+                print(tr("exiting", self.language))
                 sys.exit()
             time.sleep(0.05)
-        print("标志消失, 继续")
+        print(tr("sign_cleared", self.language))
 
 
 def key_pressed(vk):
@@ -324,44 +326,46 @@ def find_words(ocr, frame):
     return words
 
 
-def test(path):
+def test(path, language="en"):
     ocr = RapidOCR()
     frame = cv2.imread(path)
     t = time.time()
     words = find_words(ocr, frame)
-    print(f"耗时 {time.time() - t:.2f}s")
+    print(tr("elapsed", language, seconds=time.time() - t))
     h, w = frame.shape[:2]
     region = frame[int(REGION[1] * h):int(REGION[3] * h), int(REGION[0] * w):int(REGION[2] * w)]
-    print("禁止标志:", "有 (不会打字)" if has_stop_sign(region, w) else "无")
+    status = tr("sign_present", language) if has_stop_sign(region, w) else tr("sign_absent", language)
+    print(tr("sign_status", language, status=status))
     for w_ in words:
-        print(w_[:5], "I/l分不清" if is_ambiguous(w_[0]) else "", "拼法:", spellings(w_[0]))
+        print(w_[:5], tr("ambiguous", language) if is_ambiguous(w_[0]) else "",
+              tr("spellings", language), spellings(w_[0]))
         cv2.putText(frame, f"{w_[0]} [{w_[4]}]",(w_[1] - 60, w_[2] + 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
     h, w = frame.shape[:2]
     cv2.rectangle(frame, (int(REGION[0] * w), int(REGION[1] * h)), (int(REGION[2] * w), int(REGION[3] * h)), (0, 255, 0), 2)
     for b0, b1 in IGNORE_BANDS:
         cv2.rectangle(frame, (int(REGION[0] * w), int(b0 * h)), (int(REGION[2] * w), int(b1 * h)), (0, 0, 255), 2)
     cv2.imwrite("debug.png", frame)
-    print("已保存 debug.png")
+    print(tr("debug_saved", language))
 
 
-def run():
+def run(language="en"):
     ocr = RapidOCR()
     recent = {}  # word -> 上次打的时间
     tries = {}   # word -> 打过几次
     paused = False
     last_error = 0.0
-    print("3 秒后开始, 请切到游戏窗口。F8 暂停/继续, F9 退出")
+    print(tr("starting", language))
     time.sleep(3)
     with mss.mss() as sct:
         mon = sct.monitors[MONITOR]
-        guard = StopSignGuard(mon)
+        guard = StopSignGuard(mon, language)
         while True:
             if key_pressed(VK_F9):
-                print("退出")
+                print(tr("exiting", language))
                 return
             if key_pressed(VK_F8):
                 paused = not paused
-                print("暂停" if paused else "继续")
+                print(tr("paused" if paused else "resumed", language))
             if paused:
                 time.sleep(0.1)
                 continue
@@ -392,11 +396,11 @@ def run():
                 # 上次打了没消失, 就换一种 i/l 拼法再试
                 opts = spellings(word)
                 text = opts[tries.get(key, 0) % len(opts)]
-                print(f"打: {text}  (认到 {word}, {color}, y={y}, conf={score:.2f})")
+                print(tr("typing", language, text=text, word=word, color=color, y=y, score=score))
                 try:
                     type_text(text, guard)
                 except GameNotFocused:
-                    print("FFXIV 不在前台, 已暂停输入")
+                    print(tr("focus_lost", language))
                     break
                 recent[key] = time.time()
                 tries[key] = tries.get(key, 0) + 1
@@ -407,16 +411,19 @@ def run():
 
 
 if __name__ == "__main__":
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--test", help="用截图测试识别")
+    ap = argparse.ArgumentParser(description="Keybound Brawler auto typer / 自动打字脚本")
+    ap.add_argument("--test", help="Recognize a screenshot without typing / 用截图测试识别")
+    ap.add_argument("--lang", choices=("auto", "en", "zh"), default="auto",
+                    help="Console language / 控制台语言 (default: auto)")
     a = ap.parse_args()
+    language = resolve_language(a.lang)
     try:
         if a.test:
-            test(a.test)
+            test(a.test, language)
         else:
-            run()
+            run(language)
     except Exception:
         import traceback
         traceback.print_exc()
         if getattr(sys, "frozen", False):
-            input("出错了, 按回车关闭窗口")  # 打包成 exe 双击运行时, 别让窗口一闪而过
+            input(tr("error_exit", language))  # 打包成 exe 双击运行时, 别让窗口一闪而过

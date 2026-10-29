@@ -22,6 +22,8 @@ MESSAGES = {
     "debug_saved": {"en": "Saved debug.png", "zh": "已保存 debug.png"},
     "typing": {"en": "Typing: {text} (recognized {word}, {color}, y={y}, confidence={score:.2f})",
                "zh": "打: {text}  (认到 {word}, {color}, y={y}, conf={score:.2f})"},
+    "focus_lost": {"en": "FFXIV is not in the foreground; typing paused",
+                   "zh": "FFXIV 不在前台, 已暂停输入"},
     "test_help": {"en": "Recognize words in one screenshot without typing",
                   "zh": "用截图测试识别"},
     "error_exit": {"en": "Error. Press Enter to close the window",
