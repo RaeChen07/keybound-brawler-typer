@@ -46,6 +46,18 @@ python -m pip install -r requirements.txt
 python typer_bot.py
 ```
 
+### Console language / 控制台语言
+
+Console output is available in English and Simplified Chinese. By default, `--lang auto` selects Chinese for Chinese system locales and English otherwise. You can override it when running the Python script **or the packaged exe**:
+
+```bash
+python typer_bot.py --lang en
+python typer_bot.py --lang zh
+python typer_bot.py --lang auto
+```
+
+For the executable, use `typer_bot.exe --lang en` (or `zh`). The screenshot test mode also respects `--lang`.
+
 ### Hotkeys
 
 - **F8**: pause / resume
