@@ -45,6 +45,18 @@ python -m pip install -r requirements.txt
 python typer_bot.py
 ```
 
+### 控制台语言 / Console language
+
+控制台提示支持英文和简体中文。默认 `--lang auto`：中文系统区域设置使用中文，其他区域设置使用英文。Python 脚本和打包后的 exe 都可以指定语言：
+
+```bash
+python typer_bot.py --lang zh
+python typer_bot.py --lang en
+python typer_bot.py --lang auto
+```
+
+exe 对应的用法是 `typer_bot.exe --lang zh`（或 `en`）。`--test` 截图测试模式也会使用所选语言。
+
 ### 热键
 
 - **F8** 暂停 / 继续

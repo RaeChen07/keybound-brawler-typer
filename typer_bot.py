@@ -178,3 +178,280 @@ def type_text(text, guard=None):
     if guard:
         guard.wait()
     tap(VK_RETURN)
+
+
+def has_stop_sign(img, screen_w):
+    """画面里有没有红色禁止标志 (红圈 + 斜杠): 外轮廓是圆的, 里面被斜杠分成洞"""
+    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+    m = cv2.inRange(hsv, (0, 150, 150), (8, 255, 255)) | cv2.inRange(hsv, (170, 150, 150), (180, 255, 255))
+    cs, hier = cv2.findContours(m, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
+    if hier is None:
+        return False
+    for i, c in enumerate(cs):
+        if hier[0][i][3] != -1:
+            continue
+        _, r = cv2.minEnclosingCircle(c)
+        if not SIGN_RADIUS[0] <= r / screen_w <= SIGN_RADIUS[1]:
+            continue
+        x, y, w, h = cv2.boundingRect(c)
+        if not 0.8 <= w / h <= 1.25 or cv2.contourArea(c) / (np.pi * r * r) < 0.8:
+            continue  # 不是圆 (红色框是长方形)
+        if any(hier[0][j][3] == i and cv2.contourArea(cs[j]) > 0.03 * np.pi * r * r for j in range(len(cs))):
+            return True  # 圆里有洞 = 圆环
+    return False
+
+
+class StopSignGuard:
+    """禁止标志出现 SIGN_DELAY 秒后停手, 消失 SIGN_WAIT 秒后再继续打
+    后台线程一直盯着标志, 这样出现/消失的时间点准确, 不受 OCR 慢的影响"""
+
+    def __init__(self, mon, language="en"):
+        self.language = language
+        self.screen_w = mon["width"]
+        self.box = {"left": mon["left"] + int(REGION[0] * mon["width"]),
+                    "top": mon["top"] + int(REGION[1] * mon["height"]),
+                    "width": int((REGION[2] - REGION[0]) * mon["width"]),
+                    "height": int((REGION[3] - REGION[1]) * mon["height"])}
+        self.first_seen = None  # 这一次标志第一次出现的时间
+        self.last_seen = 0.0
+        threading.Thread(target=self._watch, daemon=True).start()
+
+    def _watch(self):
+        with mss.mss() as sct:  # mss 不能跨线程用, 线程里自己开一个
+            while True:
+                img = cv2.cvtColor(np.array(sct.grab(self.box)), cv2.COLOR_BGRA2BGR)
+                now = time.time()
+                if has_stop_sign(img, self.screen_w):
+                    if self.first_seen is None:
+                        self.first_seen = now
+                        print(tr("sign_seen", self.language, delay=SIGN_DELAY))
+                    self.last_seen = now
+                elif self.first_seen is not None and now - self.last_seen >= SIGN_WAIT:
+                    self.first_seen = None  # 消失够久了, 这一次结束
+                time.sleep(0.05)
+
+    def blocked(self):
+        now = time.time()
+        return self.first_seen is not None and now - self.first_seen >= SIGN_DELAY and now - self.last_seen < SIGN_WAIT
+
+    def wait(self):
+        check_stop()
+        if not self.blocked():
+            return
+        print(tr("sign_blocked", self.language))
+        while self.blocked():
+            check_stop()
+            time.sleep(0.05)
+        print(tr("sign_cleared", self.language))
+
+
+def key_pressed(vk):
+    return user32.GetAsyncKeyState(vk) & 1
+
+
+def clean(text):
+    # 保留字母、数字、空格和英文标点; OCR 认出的中文全角标点转成半角
+    text = text.translate(str.maketrans("，。！？：；“”‘’（）", ",.!?:;\"\"''()"))
+    text = re.sub(r"[^\x20-\x7E]", "", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def spellings(word):
+    """i/I/l 容易认错, 给出几种可能的拼法 (都是小写), 最可能的排第一"""
+    first = []
+    for k, c in enumerate(word):
+        if c in "Il|":
+            # I/l 长得一样: 整句第一个字母或单独的 "I" 先试 i, 其他位置先试 l (句子里的 let/like 等)
+            alone = (k == 0 or not word[k - 1].isalpha()) and (k + 1 == len(word) or not word[k + 1].isalpha())
+            first.append("i" if k == 0 or alone else "l")
+        else:
+            first.append(c.lower())
+    first = "".join(first)
+    # 只换 I/l, 带点的小写 i 不会认错, 不动
+    amb = [k for k, c in enumerate(word) if c in "Il|"]
+    swap = {"i": "l", "l": "i"}
+    out = [first]
+    # 之后按"改动的字母越少越先试"换拼法
+    for n in range(1, len(amb) + 1):
+        for ks in itertools.combinations(amb, n):
+            if len(out) >= MAX_SPELLINGS:
+                return out
+            s = list(first)
+            for k in ks:
+                s[k] = swap[s[k]]
+            out.append("".join(s))
+    return out
+
+
+def is_ambiguous(word):
+    """有没有真正分不清 I/l 的地方: 任何大写 I 或 |, 或者整句开头的小写 l"""
+    return bool(re.search(r"[I|]|^l", word))
+
+
+def classify(hsv, x0, y0, x1, y1):
+    """根据文字颜色和框底色判断标签颜色, 返回 'blue'/'gold'/'green'/'red' 或 None(灰色/背景字, 不打)
+    框底色取文字外面紧贴的一圈 (0.1~0.3 个字高): 真标签这一圈是均匀的框色,
+    直接写在背景上的字 (比如 Boss 战中间的红字提示横幅) 这一圈是杂乱的背景"""
+    h = y1 - y0
+    a, b = max(int(0.1 * h), 1), max(int(0.3 * h), 2)
+    ring = np.concatenate([hsv[max(y0 - b, 0):max(y0 - a, 0), x0:x1].reshape(-1, 3),
+                           hsv[y1 + a:y1 + b, x0:x1].reshape(-1, 3),
+                           hsv[y0:y1, max(x0 - b, 0):max(x0 - a, 0)].reshape(-1, 3),
+                           hsv[y0:y1, x1 + a:x1 + b].reshape(-1, 3)]).astype(int)
+    if len(ring) == 0:
+        return None
+    fh, fs, fv = np.median(ring, 0)
+    hue_spread = np.std(ring[:, 0])
+    px = hsv[y0:y1, x0:x1].reshape(-1, 3).astype(int)
+    th, ts, tv = np.median(px[px[:, 2] >= np.percentile(px[:, 2], 70)], 0)  # 最亮的 30% 当作文字
+    if 105 <= fh <= 130 and fs >= 120 and fv >= 120:
+        return "blue"                      # 蓝底白字
+    if (fh <= 12 or fh >= 165) and fs >= 100 and fv >= 100:
+        return "red"                       # 红底
+    if hue_spread > 25:
+        return None                        # 周围颜色杂乱 = 没有框, 是背景上的字
+    if 15 <= fh <= 65 and fv >= 110 and 8 <= th <= 30 and ts >= 60 and tv >= 140:
+        return "gold"                      # 金底, 橙黄字
+    if 60 <= fh <= 85 and fs >= 70 and fv >= 90 and 50 <= th <= 80 and ts >= 60:
+        return "green"                     # 绿底绿字
+    return None
+
+
+def find_words(ocr, frame):
+    """返回 [(word, x, y, score, color, priority)], 红/金/绿在前, 同色按 y 从大到小 (越靠下越近)"""
+    h, w = frame.shape[:2]
+    x0, y0, x1, y1 = int(REGION[0] * w), int(REGION[1] * h), int(REGION[2] * w), int(REGION[3] * h)
+    roi = frame[y0:y1, x0:x1].copy()
+    for b0, b1 in IGNORE_BANDS:
+        roi[max(int(b0 * h) - y0, 0):max(int(b1 * h) - y0, 0)] = 0
+    hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+    rh, rw = roi.shape[:2]
+    result, _ = ocr(roi)
+    words = []
+    for box, text, score in result or []:
+        if len(clean(text)) < 2 or float(score) < MIN_SCORE:
+            continue
+        pts = np.array(box, dtype=np.int32)
+        bx0, by0 = np.maximum(pts.min(0), 0)
+        bx1, by1 = pts.max(0)
+        color = classify(hsv, bx0, by0, bx1, by1)
+        if color is None:
+            continue
+        # 整图识别时偶尔会吞掉空格, 把文字紧贴着裁出来再认一次, 字母一样才用它补空格
+        pad = (by1 - by0) // 8
+        crop = roi[max(by0 - pad, 0):min(by1 + pad, rh), max(bx0 - pad, 0):min(bx1 + pad, rw)]
+        rec, _ = ocr(crop, use_det=False, use_cls=False)
+        if rec:
+            squash = lambda s: clean(s).replace(" ", "").lower()
+            if squash(rec[0][0]) == squash(text) and clean(rec[0][0]).count(" ") > clean(text).count(" "):
+                text = rec[0][0]
+        word = clean(text)
+        words.append((word, (bx0 + bx1) // 2 + x0, (by0 + by1) // 2 + y0, float(score),
+                      color, PRIORITY[color]))
+    words.sort(key=lambda t: (t[5], -t[2]))
+    return words
+
+
+def test(path, language="en"):
+    ocr = RapidOCR()
+    frame = cv2.imread(path)
+    t = time.time()
+    words = find_words(ocr, frame)
+    print(tr("elapsed", language, seconds=time.time() - t))
+    h, w = frame.shape[:2]
+    region = frame[int(REGION[1] * h):int(REGION[3] * h), int(REGION[0] * w):int(REGION[2] * w)]
+    status = tr("sign_present", language) if has_stop_sign(region, w) else tr("sign_absent", language)
+    print(tr("sign_status", language, status=status))
+    for w_ in words:
+        print(w_[:5], tr("ambiguous", language) if is_ambiguous(w_[0]) else "",
+              tr("spellings", language), spellings(w_[0]))
+        cv2.putText(frame, f"{w_[0]} [{w_[4]}]",(w_[1] - 60, w_[2] + 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
+    h, w = frame.shape[:2]
+    cv2.rectangle(frame, (int(REGION[0] * w), int(REGION[1] * h)), (int(REGION[2] * w), int(REGION[3] * h)), (0, 255, 0), 2)
+    for b0, b1 in IGNORE_BANDS:
+        cv2.rectangle(frame, (int(REGION[0] * w), int(b0 * h)), (int(REGION[2] * w), int(b1 * h)), (0, 0, 255), 2)
+    cv2.imwrite("debug.png", frame)
+    print(tr("debug_saved", language))
+
+
+def run(language="en"):
+    stop_requested.clear()
+    threading.Thread(target=watch_emergency_stop, daemon=True).start()
+    ocr = RapidOCR()
+    recent = {}  # word -> 上次打的时间
+    tries = {}   # word -> 打过几次
+    paused = False
+    last_error = 0.0
+    print(tr("starting", language))
+    time.sleep(3)
+    with mss.mss() as sct:
+        mon = sct.monitors[MONITOR]
+        guard = StopSignGuard(mon, language)
+        while True:
+            check_stop()
+            if key_pressed(VK_F8):
+                paused = not paused
+                print(tr("paused" if paused else "resumed", language))
+            if paused:
+                time.sleep(0.1)
+                continue
+            if not game_is_focused():
+                time.sleep(0.1)
+                continue
+            guard.wait()
+            try:
+                frame = cv2.cvtColor(np.array(sct.grab(mon)), cv2.COLOR_BGRA2BGR)
+                detected = find_words(ocr, frame)
+            except (cv2.error, ValueError, TypeError, IndexError, OSError) as exc:
+                # A single corrupt capture / OCR result should not end the session.
+                if time.monotonic() - last_error > 5:
+                    print(f"截图或 OCR 失败，重试: {exc}")
+                    last_error = time.monotonic()
+                time.sleep(0.1)
+                continue
+            now = time.time()
+            # 排序: 所有拼法都试过还没消失的词最后 (多半是标签重叠认错了),
+            # I/l 分不清的词其次, 剩下的按颜色优先级、离你远近 (find_words 已排好)
+            words = sorted(detected,
+                           key=lambda t: (tries.get(t[0].lower(), 0) >= len(spellings(t[0])),
+                                          is_ambiguous(t[0])))
+            for word, x, y, score, color, _ in words:
+                key = word.lower()
+                if now - recent.get(key, 0) < RETRY_COOLDOWN:
+                    continue
+                # 上次打了没消失, 就换一种 i/l 拼法再试
+                opts = spellings(word)
+                text = opts[tries.get(key, 0) % len(opts)]
+                print(tr("typing", language, text=text, word=word, color=color, y=y, score=score))
+                try:
+                    type_text(text, guard)
+                except GameNotFocused:
+                    print("FFXIV 不在前台, 已暂停输入")
+                    break
+                recent[key] = time.time()
+                tries[key] = tries.get(key, 0) + 1
+                time.sleep(AFTER_ENTER)
+                break  # 打完一个就重新截图 (画面已变化)
+            else:
+                time.sleep(0.03)
+
+
+if __name__ == "__main__":
+    ap = argparse.ArgumentParser(description="Keybound Brawler auto typer / 自动打字脚本")
+    ap.add_argument("--test", help="Recognize a screenshot without typing / 用截图测试识别")
+    ap.add_argument("--lang", choices=("auto", "en", "zh"), default="auto",
+                    help="Console language / 控制台语言 (default: auto)")
+    a = ap.parse_args()
+    language = resolve_language(a.lang)
+    try:
+        if a.test:
+            test(a.test, language)
+        else:
+            run(language)
+    except StopRequested:
+        print(tr("exiting", language))
+    except Exception:
+        import traceback
+        traceback.print_exc()
+        if getattr(sys, "frozen", False):
+            input(tr("error_exit", language))  # 打包成 exe 双击运行时, 别让窗口一闪而过
