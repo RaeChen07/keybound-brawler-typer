@@ -42,6 +42,7 @@ SHIFT_DELAY = 0.03     # 标点要按 Shift 时, Shift 按下/松开前后的等
 BEFORE_ENTER = 0.08    # 打完字到按回车之间等一下
 AFTER_ENTER = 0.15     # 回车后等待
 RETRY_COOLDOWN = 1.5   # 同一个词打完后多久内不再重打 (等怪死亡动画)
+FORGET_AFTER = 5.0     # 一个词多久没出现就忘掉它的重试记录 (之后再出现当新词)
 MIN_SCORE = 0.6        # OCR 置信度下限
 # -------------------------------------
 
@@ -53,6 +54,9 @@ GAME_EXECUTABLES = {"ffxiv_dx11.exe", "ffxiv.exe"}
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 user32.GetForegroundWindow.restype = wintypes.HWND
+# 这两个返回 SHORT, 不设 restype 的话 -1 (打不出的字符) 会变成 65535
+user32.VkKeyScanW.restype = ctypes.c_short
+user32.GetAsyncKeyState.restype = ctypes.c_short
 user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
 kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
 kernel32.OpenProcess.restype = wintypes.HANDLE
@@ -93,6 +97,7 @@ def require_game_focus():
 
 
 stop_requested = threading.Event()
+pause_requested = threading.Event()
 
 
 class StopRequested(Exception):
@@ -104,15 +109,24 @@ def check_stop():
         raise StopRequested
 
 
-def watch_emergency_stop():
-    """Poll the documented key-down bit independently of OCR and typing."""
-    was_down = False
+def watch_hotkeys(language="en"):
+    """Poll the documented key-down bit independently of OCR and typing.
+    F9 stops, F8 toggles pause; OCR can take a while, so the main loop polling would miss short taps."""
+    was_down = {VK_F8: False, VK_F9: False}
     while not stop_requested.is_set():
-        down = bool(user32.GetAsyncKeyState(VK_F9) & 0x8000)
-        if down and not was_down:
-            stop_requested.set()
-            return
-        was_down = down
+        for vk in was_down:
+            down = bool(user32.GetAsyncKeyState(vk) & 0x8000)
+            if down and not was_down[vk]:
+                if vk == VK_F9:
+                    stop_requested.set()
+                    return
+                if pause_requested.is_set():
+                    pause_requested.clear()
+                    print(tr("resumed", language))
+                else:
+                    pause_requested.set()
+                    print(tr("paused", language))
+            was_down[vk] = down
         time.sleep(0.01)
 
 
@@ -171,8 +185,8 @@ def type_text(text, guard=None):
         if guard and k % SIGN_CHECK_EVERY == 0:
             guard.wait()  # 打到一半出现禁止标志就停下, 消失后接着打
         r = user32.VkKeyScanW(ord(ch))
-        if r == -1:
-            continue
+        if r == -1 or r & 0x600:
+            continue  # 当前键盘布局打不出, 或者要 Ctrl/Alt (AltGr) 才能打, 跳过
         tap(r & 0xFF, shift=bool(r & 0x100))
     time.sleep(BEFORE_ENTER)
     if guard:
@@ -219,9 +233,15 @@ class StopSignGuard:
     def _watch(self):
         with mss.mss() as sct:  # mss 不能跨线程用, 线程里自己开一个
             while True:
-                img = cv2.cvtColor(np.array(sct.grab(self.box)), cv2.COLOR_BGRA2BGR)
+                try:
+                    img = cv2.cvtColor(np.array(sct.grab(self.box)), cv2.COLOR_BGRA2BGR)
+                    seen = has_stop_sign(img, self.screen_w)
+                except Exception as exc:  # 偶尔截图失败别让线程静默退出, 否则再也认不到标志
+                    print(tr("capture_failed", self.language, error=exc))
+                    time.sleep(1)
+                    continue
                 now = time.time()
-                if has_stop_sign(img, self.screen_w):
+                if seen:
                     if self.first_seen is None:
                         self.first_seen = now
                         print(tr("sign_seen", self.language, delay=SIGN_DELAY))
@@ -232,7 +252,8 @@ class StopSignGuard:
 
     def blocked(self):
         now = time.time()
-        return self.first_seen is not None and now - self.first_seen >= SIGN_DELAY and now - self.last_seen < SIGN_WAIT
+        first_seen = self.first_seen  # 只读一次: 后台线程随时可能把它改成 None
+        return first_seen is not None and now - first_seen >= SIGN_DELAY and now - self.last_seen < SIGN_WAIT
 
     def wait(self):
         check_stop()
@@ -243,10 +264,6 @@ class StopSignGuard:
             check_stop()
             time.sleep(0.05)
         print(tr("sign_cleared", self.language))
-
-
-def key_pressed(vk):
-    return user32.GetAsyncKeyState(vk) & 1
 
 
 def clean(text):
@@ -286,6 +303,17 @@ def spellings(word):
 def is_ambiguous(word):
     """有没有真正分不清 I/l 的地方: 任何大写 I 或 |, 或者整句开头的小写 l"""
     return bool(re.search(r"[I|]|^l", word))
+
+
+def forget_stale(words, last_seen, tries, recent, now):
+    """记下这次认到的词; 很久没出现的词清掉重试记录, 不然同一个词下一波再出现会被排到最后、
+    从错误的拼法开始试"""
+    for word in words:
+        last_seen[word.lower()] = now
+    for key in [k for k, t in last_seen.items() if now - t > FORGET_AFTER]:
+        del last_seen[key]
+        tries.pop(key, None)
+        recent.pop(key, None)
 
 
 def classify(hsv, x0, y0, x1, y1):
@@ -355,6 +383,8 @@ def find_words(ocr, frame):
 def test(path, language="en"):
     ocr = RapidOCR()
     frame = cv2.imread(path)
+    if frame is None:
+        raise SystemExit(tr("image_unreadable", language, path=path))
     t = time.time()
     words = find_words(ocr, frame)
     print(tr("elapsed", language, seconds=time.time() - t))
@@ -376,11 +406,12 @@ def test(path, language="en"):
 
 def run(language="en"):
     stop_requested.clear()
-    threading.Thread(target=watch_emergency_stop, daemon=True).start()
+    pause_requested.clear()
+    threading.Thread(target=watch_hotkeys, args=(language,), daemon=True).start()
     ocr = RapidOCR()
-    recent = {}  # word -> 上次打的时间
-    tries = {}   # word -> 打过几次
-    paused = False
+    recent = {}     # word -> 上次打的时间
+    tries = {}      # word -> 打过几次
+    last_seen = {}  # word -> 上次认到的时间
     last_error = 0.0
     print(tr("starting", language))
     time.sleep(3)
@@ -389,10 +420,7 @@ def run(language="en"):
         guard = StopSignGuard(mon, language)
         while True:
             check_stop()
-            if key_pressed(VK_F8):
-                paused = not paused
-                print(tr("paused" if paused else "resumed", language))
-            if paused:
+            if pause_requested.is_set():
                 time.sleep(0.1)
                 continue
             if not game_is_focused():
@@ -405,11 +433,12 @@ def run(language="en"):
             except (cv2.error, ValueError, TypeError, IndexError, OSError) as exc:
                 # A single corrupt capture / OCR result should not end the session.
                 if time.monotonic() - last_error > 5:
-                    print(f"截图或 OCR 失败，重试: {exc}")
+                    print(tr("capture_failed", language, error=exc))
                     last_error = time.monotonic()
                 time.sleep(0.1)
                 continue
             now = time.time()
+            forget_stale([t[0] for t in detected], last_seen, tries, recent, now)
             # 排序: 所有拼法都试过还没消失的词最后 (多半是标签重叠认错了),
             # I/l 分不清的词其次, 剩下的按颜色优先级、离你远近 (find_words 已排好)
             words = sorted(detected,
@@ -426,7 +455,7 @@ def run(language="en"):
                 try:
                     type_text(text, guard)
                 except GameNotFocused:
-                    print("FFXIV 不在前台, 已暂停输入")
+                    print(tr("not_focused", language))
                     break
                 recent[key] = time.time()
                 tries[key] = tries.get(key, 0) + 1
@@ -448,7 +477,7 @@ if __name__ == "__main__":
             test(a.test, language)
         else:
             run(language)
-    except StopRequested:
+    except (StopRequested, KeyboardInterrupt):
         print(tr("exiting", language))
     except Exception:
         import traceback
