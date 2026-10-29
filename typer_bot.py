@@ -91,6 +91,30 @@ def require_game_focus():
         raise GameNotFocused
 
 
+stop_requested = threading.Event()
+
+
+class StopRequested(Exception):
+    """Raised when the F9 emergency stop has been requested."""
+
+
+def check_stop():
+    if stop_requested.is_set():
+        raise StopRequested
+
+
+def watch_emergency_stop():
+    """Poll the documented key-down bit independently of OCR and typing."""
+    was_down = False
+    while not stop_requested.is_set():
+        down = bool(user32.GetAsyncKeyState(VK_F9) & 0x8000)
+        if down and not was_down:
+            stop_requested.set()
+            return
+        was_down = down
+        time.sleep(0.01)
+
+
 class KEYBDINPUT(ctypes.Structure):
     _fields_ = [("wVk", ctypes.c_ushort), ("wScan", ctypes.c_ushort),
                 ("dwFlags", ctypes.c_ulong), ("time", ctypes.c_ulong),
@@ -114,6 +138,7 @@ def _send_scan(vk, up=False):
 
 
 def tap(vk, shift=False):
+    check_stop()
     require_game_focus()
     # Shift 前后都要留时间, 不然游戏会把顺序搞乱
     if shift:
@@ -121,6 +146,7 @@ def tap(vk, shift=False):
         time.sleep(SHIFT_DELAY)
     try:
         # Re-check after Shift; always release keys even if focus changes.
+        check_stop()
         require_game_focus()
         _send_scan(vk)
         try:
@@ -139,6 +165,7 @@ def type_text(text, guard=None):
     time.sleep(BEFORE_TYPE)
     # 大小写无所谓, 字母一律小写打, 只有标点才需要 Shift
     for k, ch in enumerate(text.lower()):
+        check_stop()
         require_game_focus()
         if guard and k % SIGN_CHECK_EVERY == 0:
             guard.wait()  # 打到一半出现禁止标志就停下, 消失后接着打
@@ -206,13 +233,12 @@ class StopSignGuard:
         return self.first_seen is not None and now - self.first_seen >= SIGN_DELAY and now - self.last_seen < SIGN_WAIT
 
     def wait(self):
+        check_stop()
         if not self.blocked():
             return
         print("禁止标志, 停止打字...")
         while self.blocked():
-            if key_pressed(VK_F9):
-                print("退出")
-                sys.exit()
+            check_stop()
             time.sleep(0.05)
         print("标志消失, 继续")
 
@@ -345,6 +371,8 @@ def test(path):
 
 
 def run():
+    stop_requested.clear()
+    threading.Thread(target=watch_emergency_stop, daemon=True).start()
     ocr = RapidOCR()
     recent = {}  # word -> 上次打的时间
     tries = {}   # word -> 打过几次
@@ -356,9 +384,7 @@ def run():
         mon = sct.monitors[MONITOR]
         guard = StopSignGuard(mon)
         while True:
-            if key_pressed(VK_F9):
-                print("退出")
-                return
+            check_stop()
             if key_pressed(VK_F8):
                 paused = not paused
                 print("暂停" if paused else "继续")
@@ -415,6 +441,8 @@ if __name__ == "__main__":
             test(a.test)
         else:
             run()
+    except StopRequested:
+        print("F9 pressed, exiting")
     except Exception:
         import traceback
         traceback.print_exc()
