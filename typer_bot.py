@@ -349,6 +349,7 @@ def run():
     recent = {}  # word -> 上次打的时间
     tries = {}   # word -> 打过几次
     paused = False
+    last_error = 0.0
     print("3 秒后开始, 请切到游戏窗口。F8 暂停/继续, F9 退出")
     time.sleep(3)
     with mss.mss() as sct:
@@ -368,11 +369,20 @@ def run():
                 time.sleep(0.1)
                 continue
             guard.wait()
-            frame = cv2.cvtColor(np.array(sct.grab(mon)), cv2.COLOR_BGRA2BGR)
+            try:
+                frame = cv2.cvtColor(np.array(sct.grab(mon)), cv2.COLOR_BGRA2BGR)
+                detected = find_words(ocr, frame)
+            except (cv2.error, ValueError, TypeError, IndexError, OSError) as exc:
+                # A single corrupt capture / OCR result should not end the session.
+                if time.monotonic() - last_error > 5:
+                    print(f"截图或 OCR 失败，重试: {exc}")
+                    last_error = time.monotonic()
+                time.sleep(0.1)
+                continue
             now = time.time()
             # 排序: 所有拼法都试过还没消失的词最后 (多半是标签重叠认错了),
             # I/l 分不清的词其次, 剩下的按颜色优先级、离你远近 (find_words 已排好)
-            words = sorted(find_words(ocr, frame),
+            words = sorted(detected,
                            key=lambda t: (tries.get(t[0].lower(), 0) >= len(spellings(t[0])),
                                           is_ambiguous(t[0])))
             for word, x, y, score, color, _ in words:
