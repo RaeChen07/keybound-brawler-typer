@@ -22,8 +22,11 @@ MESSAGES = {
     "debug_saved": {"en": "Saved debug.png", "zh": "已保存 debug.png"},
     "typing": {"en": "Typing: {text} (recognized {word}, {color}, y={y}, confidence={score:.2f})",
                "zh": "打: {text}  (认到 {word}, {color}, y={y}, conf={score:.2f})"},
-    "test_help": {"en": "Recognize words in one screenshot without typing",
-                  "zh": "用截图测试识别"},
+    "capture_failed": {"en": "Screenshot or OCR failed, retrying: {error}",
+                       "zh": "截图或 OCR 失败, 重试: {error}"},
+    "not_focused": {"en": "FFXIV is not in the foreground; input paused",
+                    "zh": "FFXIV 不在前台, 已暂停输入"},
+    "image_unreadable": {"en": "Cannot read image: {path}", "zh": "读不了图片: {path}"},
     "error_exit": {"en": "Error. Press Enter to close the window",
                    "zh": "出错了, 按回车关闭窗口"},
 }
